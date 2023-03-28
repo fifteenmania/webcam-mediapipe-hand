@@ -1,8 +1,9 @@
-import { FilesetResolver, GestureRecognizer } from '@mediapipe/tasks-vision';
-import gestureModel from './assets/gesture_recognizer.task';
+import { FilesetResolver, GestureRecognizer, HandLandmarker } from '@mediapipe/tasks-vision';
+import handLandmarkerModel from './assets/hand_landmarker.task';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import Stats from 'three/examples/jsm/libs/stats.module'
 import {
+  BufferAttribute,
   Vector3,
   Line,
   LineBasicMaterial,
@@ -16,6 +17,7 @@ import {
   GridHelper,
   Clock,
   AxesHelper,
+  Mesh,
 } from 'three';
 
 const renderer = new WebGLRenderer();
@@ -61,72 +63,88 @@ const vision = await FilesetResolver.forVisionTasks(
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
 );
 
-const gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
+const handLandmarker = await HandLandmarker.createFromOptions(vision, {
   baseOptions: {
-    modelAssetPath: gestureModel,
+    modelAssetPath: handLandmarkerModel,
+    maxNumHands: 1,
+    minDetectionConfidence: 0.5,
   },
-  minTrackingConfidence: 0.5,
-  minHandDetectionConfidence: 0.5,
-  numHands: 2,
-});
+})
+await handLandmarker.setOptions({ runningMode: "video" });
 
 const connectors = [
-  [0, 1, 2, 3, 4],
-  [0, 5, 6, 7, 8],
-  [0, 9, 10, 11, 12],
-  [0, 13, 14, 15, 16],
-  [0, 17, 18, 19, 20],
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [3, 4],
+  [0, 5],
+  [5, 6],
+  [6, 7],
+  [7, 8],
+  [0, 9],
+  [9, 10],
+  [10, 11],
+  [11, 12],
+  [0, 13],
+  [13, 14],
+  [14, 15],
+  [15, 16],
+  [0, 17],
+  [17, 18],
+  [18, 19],
+  [19, 20],
+  [5, 9],
+  [9, 13],
+  [13, 17],
 ];
+const indexBuffer = new Int16Array(connectors.length * 2);
+for (let i = 0; i < connectors.length; i++) {
+  const connector = connectors[i];
+  indexBuffer[i * 2] = connector[0];
+  indexBuffer[i * 2 + 1] = connector[1];
+}
 
-const $canvas = renderer.domElement;
-/** @type {CanvasRenderingContext2D} */
-const width = 640;
-const height = 480;
-$canvas.width = width;
-$canvas.height = height;
+const handMaterial = new LineBasicMaterial({ color: 0xffffff });
+const positionBuffer = new Float32Array(21 * 3);
+const handGeometry = new BufferGeometry();
+handGeometry.setAttribute('position', new BufferAttribute(positionBuffer, 3));
+handGeometry.setIndex(indexBuffer);
+const handLine = new Mesh(handGeometry, handMaterial);
+scene.add(handLine);
 
-const material = new LineBasicMaterial({ color: 0xffffff });
+let drawCount = 0;
 
-gestureRecognizer.setOptions({ runningMode: 'video' });
 navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
   const video = document.createElement('video');
   video.srcObject = stream;
   video.onloadedmetadata = () => {
-    console.log('video loaded');
     video.play();
-    gestureRecognizer.setOptions({ input: video });
     video.addEventListener('play', () => {
-      console.log('video playing');
       const render = () => {
         if (video.paused || video.ended) return;
-        const results = gestureRecognizer.recognizeForVideo(video, Date.now());
-        if (results.landmarks.length > 0) {
-          const landmarks = results.landmarks[0];
-          const handGroup = new Group();
-          handGroup.name = 'handGroup';
-          scene.traverse((child) => {
-            if (child.name === 'handGroup') {
-              scene.remove(child);
-            }
-          });
-          for (let i = 0; i < connectors.length; i++) {
-            const connector = connectors[i];
-            const linePoints = [];
-            for (let j = 0; j < connector.length; j++) {
-              const landmark = landmarks[connector[j]];
-              linePoints.push(new Vector3(landmark.x, landmark.y, landmark.z));
-            }
-            const geometry = new BufferGeometry().setFromPoints(linePoints);
-            const line = new Line(geometry, material);
-            handGroup.add(line);
+        const detections = handLandmarker.detectForVideo(video, Date.now());
+        if (detections.landmarks.length > 0) {
+          if (drawCount === 1) {
+            handLine.geometry.attributes.position.needsUpdate = true;
           }
-          scene.add(handGroup);
+          updatePositionsWithlandmarks(detections.landmarks[0]);
+          drawCount++;
         }
         renderer.render(scene, camera);
-        stats.update()
+        stats.update();
         requestAnimationFrame(render);
       };
       render();
     });
   };
 });
+
+function updatePositionsWithlandmarks(landmarks) {
+  const positions = handLine.geometry.attributes.position.array;
+  for (let i = 0; i < landmarks.length; i++) {
+    const landmark = landmarks[i];
+    positions[i * 3] = landmark.x;
+    positions[i * 3 + 1] = landmark.y;
+    positions[i * 3 + 2] = landmark.z;
+  }
+}
